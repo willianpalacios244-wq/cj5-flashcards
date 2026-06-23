@@ -213,8 +213,8 @@ html,body{height:100%;background:linear-gradient(135deg,var(--navy) 0%,var(--nav
       </div>
       <div class="audio-field">
         <label>SPEED</label>
-        <input type="range" id="rateSlider" min="0.6" max="1.4" step="0.05" value="0.9"/>
-        <span id="rateVal" style="font-size:11px;color:var(--muted)">0.9×</span>
+        <input type="range" id="rateSlider" min="0.6" max="1.4" step="0.05" value="0.82"/>
+        <span id="rateVal" style="font-size:11px;color:var(--muted)">0.82×</span>
       </div>
       <div class="audio-field">
         <label>PITCH</label>
@@ -557,28 +557,61 @@ function toggleAudioPanel() {
 }
 
 // ===== TTS SPEAK =====
-function speak(text) {
-  return new Promise((resolve, reject) => {
-    window.speechSynthesis.cancel();
-    const cleaned = text.replace(/_{2,}/g, 'blank').replace(/^"|"$/g, '').trim();
-    const utt = new SpeechSynthesisUtterance(cleaned);
-    
-    // Apply settings
-    const voice = selectedVoice || voices[0];
-    if (voice) utt.voice = voice;
-    utt.rate = parseFloat(document.getElementById('rateSlider').value);
-    utt.pitch = parseFloat(document.getElementById('pitchSlider').value);
-    utt.volume = 1;
+function preprocessText(text) {
+  return text
+    .replace(/_{2,}/g, 'blank')          // blanks
+    .replace(/^"|"$/g, '')               // strip outer quotes
+    .replace(/&/g, ' and ')
+    .replace(/\//g, ' or ')
+    .replace(/e\.g\./gi, 'for example')
+    .replace(/i\.e\./gi, 'that is')
+    .replace(/etc\./gi, 'and so on')
+    .replace(/vs\./gi, 'versus')
+    .replace(/U\.S\./gi, 'U S')
+    .replace(/([A-Z]{2,})/g, m => m.split('').join(' ')) // spell out acronyms
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
-    // Keep-alive for long utterances (Chrome bug fix)
+// Split long text into natural chunks at sentence boundaries
+function splitIntoChunks(text) {
+  // Split on sentence endings, semicolons, or long commas
+  const parts = text.split(/(?<=[.!?;])\s+|(?<=,\s{0,5}(?:and|but|or|which|that|because|however|therefore|although)\s)/i);
+  return parts.filter(p => p.trim().length > 0);
+}
+
+function speakChunk(text, voice, rate, pitch) {
+  return new Promise((resolve, reject) => {
+    const utt = new SpeechSynthesisUtterance(text);
+    if (voice) utt.voice = voice;
+    utt.rate = rate;
+    utt.pitch = pitch;
+    utt.volume = 1;
     const keepAlive = setInterval(() => {
       if (window.speechSynthesis.paused) window.speechSynthesis.resume();
-    }, 5000);
-
+    }, 4000);
     utt.onend = () => { clearInterval(keepAlive); resolve(); };
     utt.onerror = (e) => { clearInterval(keepAlive); if(e.error !== 'interrupted') reject(e); else resolve(); };
     window.speechSynthesis.speak(utt);
   });
+}
+
+async function speak(text) {
+  window.speechSynthesis.cancel();
+  await new Promise(r => setTimeout(r, 80)); // small gap after cancel
+
+  const cleaned = preprocessText(text);
+  const chunks = splitIntoChunks(cleaned);
+  const voice = selectedVoice || voices[0];
+  const rate = parseFloat(document.getElementById('rateSlider').value);
+  const pitch = parseFloat(document.getElementById('pitchSlider').value);
+
+  for (const chunk of chunks) {
+    if (audioAbort) break;
+    await speakChunk(chunk.trim(), voice, rate, pitch);
+    // tiny natural pause between sentences
+    if (chunks.length > 1) await new Promise(r => setTimeout(r, 120));
+  }
 }
 
 function sleep(ms) {
@@ -606,11 +639,11 @@ async function startAudio() {
     document.getElementById('ttsBar').style.width = pct + '%';
     document.getElementById('audioCardCount').textContent = `Card ${i + 1} of ${total}`;
 
-    // Read question
+    // Read question number + question
     document.getElementById('phaseLabel').textContent = '❓ Question…';
     document.getElementById('cardHint').textContent = '🔊 Reading question…';
     document.getElementById('fsCardHint').textContent = '🔊 Reading question…';
-    try { await speak(card.q); } catch(e) { if(audioAbort) break; }
+    try { await speak(`Question ${i + 1}. ${card.q}`); } catch(e) { if(audioAbort) break; }
     if (audioAbort) break;
 
     await sleep(pauseSec * 600);
